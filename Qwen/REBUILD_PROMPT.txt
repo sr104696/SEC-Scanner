@@ -1,0 +1,258 @@
+You are a senior full-stack engineer and QA lead. Rebuild and improve the attached repository as a deterministic, production-ready Next.js application named “Ledger — SEC EDGAR Financial Extractor”. Execute every step exactly as written. Do not skip steps, do not infer missing requirements, and do not rename required APIs, files, or data contracts.
+
+0) OPERATING MODE (MANDATORY)
+1. Work in strict execution mode: perform actions in the exact order below.
+2. If any validation command fails, stop, fix, and re-run until green.
+3. Do not add speculative features. Only implement what is specified.
+4. Preserve the wire contract for `POST /api/sec-financials`.
+5. Never expose secrets to client-side code.
+
+1) TARGET STACK AND VERSIONS
+1. Use Node.js 24.14.x.
+2. Use Next.js 15.x with App Router.
+3. Use TypeScript strict mode.
+4. Use React 18.x.
+5. Use Tailwind CSS + shadcn-style UI components.
+6. Use Jest for unit tests and Playwright for e2e scaffolding.
+
+2) REPOSITORY LAYOUT TO PRODUCE
+Create/maintain these top-level files and folders:
+- `package.json`
+- `tsconfig.json`
+- `next.config.js`
+- `tailwind.config.ts`
+- `postcss.config.js`
+- `jest.config.ts`
+- `playwright.config.ts`
+- `globals.css`
+- `README.md`
+- `public/vybe-icon.svg`
+- `public/vybe-icon-black.svg`
+- `src/app/layout.tsx`
+- `src/app/page.tsx`
+- `src/app/error.tsx`
+- `src/app/api/sec-financials/route.ts`
+- `src/shared/sec-types.ts`
+- `src/client-lib/api-client.ts`
+- `src/server-lib/sec/sec-financials.ts`
+- `src/components/ledger/TickerForm.tsx`
+- `src/components/ledger/SnapshotCard.tsx`
+- `src/components/ledger/HistoryTable.tsx`
+- `src/components/ledger/FilingsPanel.tsx`
+- `src/server-lib/sec/sec-financials.test.ts`
+- `src/components/ledger/HistoryTable.test.ts`
+
+3) PRODUCT REQUIREMENT (EXACT BEHAVIOR)
+Implement a web app that:
+1. Accepts ticker + start year + end year.
+2. Fetches SEC data server-side only.
+3. Returns:
+   - snapshot metrics
+   - historical period table
+   - filing links for recent 10-K, 8-K, DEF 14A
+4. Renders:
+   - input form
+   - snapshot cards
+   - historical table
+   - filings panel
+5. Allows CSV export of historical table.
+6. Shows deterministic validation and error states.
+
+4) API CONTRACT (DO NOT CHANGE)
+Endpoint:
+- `POST /api/sec-financials`
+
+Request JSON:
+- `ticker: string`
+- `startYear: number`
+- `endYear: number`
+
+Response JSON type `SecResponse`:
+- `snapshot: SnapshotData`
+- `periods: Period[]`
+- `filings: { recent10K: FilingMeta[]; recent8K: FilingMeta[]; recentDEF14A: FilingMeta[] }`
+
+Errors:
+- 400 for invalid JSON body.
+- 4xx/5xx with `{ error: string }` for processing/fetch failures.
+
+5) SHARED TYPE CONTRACT (COPY EXACT SHAPE)
+Define in `src/shared/sec-types.ts`:
+1. `SnapshotData` with these fields (nullable number/string where applicable):
+   - ticker, entityName, cik, latestEnd, fiscalYear, fiscalYearEnd, mostRecentQuarterEnd
+   - profitMargin, operatingMargin, returnOnAssets, returnOnEquity
+   - revenueTTM, revenuePerShareTTM, quarterlyRevenueGrowthYoY, grossProfitTTM, ebitdaTTM, netIncomeToCommonTTM, dilutedEPSTTM, quarterlyEarningsGrowthYoY
+   - totalCashMRQ, totalCashPerShareMRQ, totalDebtMRQ, totalDebtToEquityMRQ, currentRatioMRQ, bookValuePerShareMRQ
+   - operatingCashFlowTTM, leveredFreeCashFlowTTM
+   - sharesOutstanding
+   - forwardAnnualDividendRate, trailingAnnualDividendRate, payoutRatio
+2. `Period`: key, label, fy, fp, end, start, form, values.
+3. `FilingMeta`: form, filed, reportDate, accession, url.
+4. `SecResponse` and `SecRequest`.
+5. Formatters: `fmtMoney`, `fmtPct`, `fmtNum`, `fmtShares`.
+
+6) SERVER EXTRACTION ENGINE (REQUIRED LOGIC)
+In `src/server-lib/sec/sec-financials.ts`, implement deterministic functions:
+1. `resolveCik(ticker)`:
+   - Fetch `https://www.sec.gov/files/company_tickers.json`.
+   - Match uppercase ticker.
+   - Return zero-padded 10-digit CIK and entity name.
+2. `secFetch(url)`:
+   - Send `User-Agent` with contact email.
+   - Default fallback user-agent string if env var missing/invalid.
+3. `pickUnits(facts, conceptCandidates, preferredUnits)`:
+   - Merge concept synonyms from `us-gaap` and `dei`.
+   - Dedupe by `(start|end)` using latest `filed` date.
+4. `classify(unit)`:
+   - Quarterly if duration 80–100 days.
+   - Annual if duration 350–380 days.
+   - Instant when no `start`.
+   - Treat other durations as annual/YTD bucket candidates.
+5. `bucketFlow(units, isPerShare=false)`:
+   - Build quarterly and annual maps.
+   - Derive Q4 as `Annual - (Q1+Q2+Q3)` only for non-per-share metrics.
+   - Skip Q4 derivation for per-share series (EPS, dividends/share).
+6. Sorting rule:
+   - If FY and Q4 share end date, FY row must sort before Q4.
+7. Dividend logic:
+   - `forwardAnnualDividendRate = 4 * latest quarterly DPS`.
+   - Keep trailing annual dividend rate separately.
+8. Content-type guard:
+   - Reject SEC responses that are not JSON (throttling HTML pages).
+9. Return assembled `SecResponse` with snapshot + periods + filings.
+
+7) FINANCIAL CONCEPT MAP (MUST INCLUDE SYNONYM STRATEGY)
+Implement a concept dictionary that includes at least:
+- Revenue, CostOfRevenue, GrossProfit, OperatingIncome, NetIncome, NetIncomeToCommon
+- EPSDiluted, EPSBasic
+- OpCashFlow, CapEx, DepreciationAmortization, InterestExpense, IncomeTax
+- Cash, ShortTermInvestments
+- LongTermDebt, ShortTermDebt
+- TotalAssets, TotalEquity, CurrentAssets, CurrentLiabilities
+- SharesOutstanding, WeightedAvgDilutedShares
+- DividendsPerShare, DividendsPaid
+Use synonym arrays for each concept to handle filer variability.
+
+8) ROUTE HANDLER REQUIREMENTS
+In `src/app/api/sec-financials/route.ts`:
+1. Export `runtime = "nodejs"`.
+2. Export generous `maxDuration` (60 seconds).
+3. Parse request JSON safely.
+4. Coerce defaults:
+   - `startYear = currentYear - 5`
+   - `endYear = currentYear`
+5. On known extractor error, return extractor status + message.
+6. On unknown error, log and return 500.
+
+9) CLIENT DATA ACCESS
+In `src/client-lib/api-client.ts`:
+1. Implement `extractSecFinancials(params)` calling `/api/sec-financials`.
+2. Throw clear error message when response is non-OK.
+3. Return typed `SecResponse`.
+
+10) UI IMPLEMENTATION (EXACT INTERACTION MODEL)
+A) `src/app/page.tsx`
+1. Manage state: `data`, `ticker`, `loading`, `error`.
+2. Render top header with product description.
+3. Render form card, error card, empty state card, and success state panels.
+4. On submit: call `extractSecFinancials`, set state, show success/error toasts.
+
+B) `src/components/ledger/TickerForm.tsx`
+1. Controlled inputs:
+   - ticker default `AAPL`
+   - startYear default `currentYear - 5`
+   - endYear default `currentYear`
+2. Validation:
+   - ticker required
+   - year values must be finite numbers
+   - `startYear <= endYear`
+3. Submit callback returns uppercase ticker.
+
+C) `src/components/ledger/HistoryTable.tsx`
+1. Render grouped sections:
+   - Income Statement
+   - Cash Flow
+   - Balance Sheet
+   - Margins
+2. Render per-period columns with period label, end date, and form.
+3. Negative numbers use loss color.
+4. Include CSV export button.
+5. Implement RFC-4180 `csvEscape`:
+   - Quote cells with comma, quote, CR, LF.
+   - Double inner quotes.
+6. CSV output:
+   - `\r\n` line endings
+   - filename `${ticker}_ledger.csv` with no trailing newline
+   - delay `URL.revokeObjectURL` by ~1 second.
+
+D) `src/components/ledger/SnapshotCard.tsx`
+1. Render KPIs grouped by profitability, growth, balance sheet, and cash flow.
+2. Use formatter helpers from `sec-types.ts`.
+
+E) `src/components/ledger/FilingsPanel.tsx`
+1. Render recent filings as clickable SEC links.
+2. Show form type, filed date, and report date.
+
+11) QUALITY IMPROVEMENTS TO APPLY (NON-NEGOTIABLE)
+1. Keep business logic pure and testable in `sec-financials.ts`.
+2. Keep API route thin (orchestration only).
+3. Centralize wire types in shared module.
+4. Ensure no client-side SEC fetches.
+5. Ensure deterministic null handling for missing facts.
+6. Keep payout-ratio styling neutral (no false gain/loss color bias).
+
+12) TESTS (MUST EXIST AND PASS)
+Create and pass:
+1. `src/server-lib/sec/sec-financials.test.ts`:
+   - classification tests
+   - `bucketFlow` Q4 derivation tests
+   - per-share no-Q4-derivation test
+2. `src/components/ledger/HistoryTable.test.ts`:
+   - `csvEscape` quote/comma/newline behavior
+3. Run:
+   - `npm run test`
+   - `npm run typecheck`
+   - `npm run lint`
+
+13) DETERMINISTIC BUILD CHECKLIST
+Execute in order:
+1. Install dependencies via lockfile.
+2. Run lint.
+3. Run typecheck.
+4. Run unit tests.
+5. Run production build.
+6. Start app and verify manual flow:
+   - input `AAPL`, range last 5 years
+   - confirm snapshot loads
+   - confirm periods table renders
+   - confirm filings links render
+   - confirm CSV downloads
+
+14) README REQUIREMENTS
+Write `README.md` with:
+1. Project purpose.
+2. Architecture overview.
+3. Exact run commands.
+4. Environment variable docs (`SEC_USER_AGENT`).
+5. Known data caveats (narrative-only fields in 8-K/DEF 14A).
+6. Testing commands.
+
+15) ACCEPTANCE CRITERIA (ALL MUST BE TRUE)
+1. App runs locally with `npm run dev`.
+2. `/api/sec-financials` returns valid `SecResponse` for valid ticker.
+3. Invalid input and upstream failures return deterministic errors.
+4. Q4 derivation logic is correct and excludes per-share series.
+5. CSV export is RFC-4180 compliant.
+6. Tests pass.
+7. Typecheck passes.
+8. Lint passes.
+9. No secrets leak to browser.
+
+16) FINAL OUTPUT FORMAT FOR YOUR WORK SESSION
+After implementing, output exactly these sections:
+1. `Implemented Files`
+2. `Behavior Verified`
+3. `Test Results`
+4. `Build Results`
+5. `Known Limitations`
+Each section must contain concrete facts only, no speculation.
